@@ -1,0 +1,138 @@
+name: Deploy app to homelab
+
+# Reusable workflow chamado por repos de app via:
+#
+#   jobs:
+#     deploy:
+#       uses: targz-org/.github/.github/workflows/deploy.yml@main
+#       with:
+#         app_name: minhaapp
+#       secrets: inherit
+#
+# Builda a imagem via BuildKit interno do cluster, pusha pro Harbor, e bumpa
+# o tag no targz-org/homelab-apps. ArgoCD detecta o diff e faz rollout.
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        type: string
+        required: true
+        description: "Nome curto da app (kebab-case). Vira project no Harbor, namespace no K8s, e dir em apps/ no homelab-apps."
+      image_subpath:
+        type: string
+        required: false
+        default: "api"
+        description: "Subpath da imagem dentro do projeto Harbor. Default: 'api' → harbor.../<app>/api:<sha>."
+      build_context:
+        type: string
+        required: false
+        default: "."
+        description: "Path do contexto do docker build (relativo à raiz do repo). Dockerfile deve estar nesse dir."
+
+env:
+  REGISTRY: harbor.lab.targz.org
+  BUILDKIT_ADDR: tcp://buildkit.arc-runners.svc.cluster.local:1234
+  HOMELAB_APPS_REPO: targz-org/homelab-apps
+  BUILDKIT_VERSION: v0.18.2
+  YQ_VERSION: v4.45.1
+
+jobs:
+  build-and-deploy:
+    runs-on: arc-runner
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          SHA=$(git rev-parse --short=12 HEAD)
+          echo "value=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Install buildctl
+        run: |
+          curl -sL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local --strip-components=1 bin/buildctl
+          buildctl --version
+
+      - name: Install yq
+        run: |
+          sudo curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Login to Harbor
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          mkdir -p ~/.docker
+          AUTH=$(printf "%s:%s" "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 -w0)
+          cat > ~/.docker/config.json <<EOF
+          {"auths":{"${REGISTRY}":{"auth":"${AUTH}"}}}
+          EOF
+
+      - name: Build & push image
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ inputs.app_name }}/${{ inputs.image_subpath }}:${{ steps.tag.outputs.value }}
+        run: |
+          echo "Building & pushing: $IMAGE"
+          buildctl --addr "$BUILDKIT_ADDR" build \
+            --frontend dockerfile.v0 \
+            --local context="${{ inputs.build_context }}" \
+            --local dockerfile="${{ inputs.build_context }}" \
+            --opt platform=linux/amd64 \
+            --opt label:org.opencontainers.image.revision="${{ github.sha }}" \
+            --opt label:org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}" \
+            --output type=image,\"name=$IMAGE\",push=true
+
+      - name: Generate token to commit on homelab-apps
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: targz-org
+          repositories: homelab-apps
+
+      - name: Checkout homelab-apps
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOMELAB_APPS_REPO }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: homelab-apps
+
+      - name: Bump image tag in homelab-apps
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ inputs.app_name }}/${{ inputs.image_subpath }}:${{ steps.tag.outputs.value }}
+          MANIFEST_REL: apps/${{ inputs.app_name }}/homelabapplication.yaml
+        working-directory: homelab-apps
+        run: |
+          if [[ ! -f "$MANIFEST_REL" ]]; then
+            echo "::error::Manifest não existe: $MANIFEST_REL"
+            echo "Crie o dir apps/${{ inputs.app_name }}/ no homelab-apps com namespace.yaml + homelabapplication.yaml antes do primeiro deploy."
+            exit 1
+          fi
+          yq -i ".spec.image = \"$IMAGE\"" "$MANIFEST_REL"
+          echo "Diff:"
+          git diff -- "$MANIFEST_REL" || true
+
+      - name: Commit & push
+        working-directory: homelab-apps
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+          MANIFEST_REL: apps/${{ inputs.app_name }}/homelabapplication.yaml
+        run: |
+          if git diff --quiet -- "$MANIFEST_REL"; then
+            echo "Nada pra commitar (tag já está atualizada)."
+            exit 0
+          fi
+          git config user.name  "homelab-bot[bot]"
+          git config user.email "homelab-bot@users.noreply.github.com"
+          git add "$MANIFEST_REL"
+          git commit -m "${{ inputs.app_name }}: deploy ${TAG}"
+          git push
