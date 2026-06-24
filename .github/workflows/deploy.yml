@@ -55,28 +55,15 @@ jobs:
 
       - name: Install buildctl
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           mkdir -p "$HOME/.local/bin"
           TMP=$(mktemp -d)
+          trap 'rm -rf "$TMP"' EXIT
 
           URL="https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-amd64.tar.gz"
-          echo "Downloading: $URL"
           curl -fSL "$URL" -o "$TMP/buildkit.tar.gz"
-          ls -la "$TMP/buildkit.tar.gz"
-          file "$TMP/buildkit.tar.gz" || true
-
-          echo "=== tarball contents (first 5) ==="
-          tar -tzf "$TMP/buildkit.tar.gz" | head -5
-
-          echo "=== extracting ==="
-          tar -xzvf "$TMP/buildkit.tar.gz" -C "$TMP" bin/buildctl
-
-          echo "=== finding buildctl ==="
-          find "$TMP" -name buildctl -type f
-
-          cp "$TMP/bin/buildctl" "$HOME/.local/bin/buildctl"
-          chmod +x "$HOME/.local/bin/buildctl"
-          rm -rf "$TMP"
+          tar -xzf "$TMP/buildkit.tar.gz" -C "$TMP" bin/buildctl
+          install -m 0755 "$TMP/bin/buildctl" "$HOME/.local/bin/buildctl"
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/buildctl" --version
