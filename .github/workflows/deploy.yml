@@ -55,11 +55,29 @@ jobs:
 
       - name: Install buildctl
         run: |
+          set -euxo pipefail
           mkdir -p "$HOME/.local/bin"
-          # Tarball tem estrutura bin/buildctl — extrai mantendo o prefix
-          # pra ficar em $HOME/.local/bin/buildctl.
-          curl -sL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-amd64.tar.gz" \
-            | tar -xz -C "$HOME/.local" bin/buildctl
+          TMP=$(mktemp -d)
+
+          URL="https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-amd64.tar.gz"
+          echo "Downloading: $URL"
+          curl -fSL "$URL" -o "$TMP/buildkit.tar.gz"
+          ls -la "$TMP/buildkit.tar.gz"
+          file "$TMP/buildkit.tar.gz" || true
+
+          echo "=== tarball contents (first 5) ==="
+          tar -tzf "$TMP/buildkit.tar.gz" | head -5
+
+          echo "=== extracting ==="
+          tar -xzvf "$TMP/buildkit.tar.gz" -C "$TMP" bin/buildctl
+
+          echo "=== finding buildctl ==="
+          find "$TMP" -name buildctl -type f
+
+          cp "$TMP/bin/buildctl" "$HOME/.local/bin/buildctl"
+          chmod +x "$HOME/.local/bin/buildctl"
+          rm -rf "$TMP"
+
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/buildctl" --version
 
