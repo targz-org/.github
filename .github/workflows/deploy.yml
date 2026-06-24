@@ -55,15 +55,19 @@ jobs:
 
       - name: Install buildctl
         run: |
+          mkdir -p "$HOME/.local/bin"
           curl -sL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-amd64.tar.gz" \
-            | sudo tar -xz -C /usr/local --strip-components=1 bin/buildctl
-          buildctl --version
+            | tar -xz -C "$HOME/.local" --strip-components=1 bin/buildctl
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/buildctl" --version
 
       - name: Install yq
         run: |
-          sudo curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
+          mkdir -p "$HOME/.local/bin"
+          curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+            -o "$HOME/.local/bin/yq"
+          chmod +x "$HOME/.local/bin/yq"
+          "$HOME/.local/bin/yq" --version
 
       - name: Login to Harbor
         env:
