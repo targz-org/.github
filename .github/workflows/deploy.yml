@@ -29,6 +29,19 @@ on:
         required: false
         default: "."
         description: "Path do contexto do docker build (relativo à raiz do repo). Dockerfile deve estar nesse dir."
+    secrets:
+      HARBOR_USERNAME:
+        required: true
+        description: "Robot push do Harbor (repo secret, provisionado pelo módulo app-bootstrap)."
+      HARBOR_PASSWORD:
+        required: true
+        description: "Secret do robot push (repo secret, provisionado pelo módulo app-bootstrap)."
+      BOT_APP_ID:
+        required: true
+        description: "App ID da GitHub App (org secret, provisionado pelo módulo github-org)."
+      BOT_APP_PRIVATE_KEY:
+        required: true
+        description: "Private key PEM da GitHub App (org secret, provisionado pelo módulo github-org)."
 
 env:
   REGISTRY: harbor.lab.targz.org
